@@ -39,7 +39,6 @@ This tool was built in one conversation between me (a project manager) and Claud
 
 ## 5. What has NOT been checked
 
-- The page was not clicked through in a real browser.
 - The Claude (AI) path was tested only with a pretend reply, not a live call with a real key.
 - The no-key rules are simple. They work best when notes have headings like "Action items". Lines with no heading are sorted by keywords and may be wrong, which is why the table is editable.
 
