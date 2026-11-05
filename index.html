@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Notes → Tasks</title>
+<style>
+  :root { --ink:#1f2933; --muted:#667085; --line:#d9dee5; --bg:#f6f7f9; --card:#fff; --accent:#2f5bea; --warn:#fff4d6; --warn-ink:#8a5a00; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-weight:600; margin-bottom:6px; }
+  textarea, input, select { font:inherit; color:inherit; border:1px solid var(--line); border-radius:6px; padding:6px 8px; background:#fff; }
+  #notes { width:100%; min-height:220px; resize:vertical; }
+  .bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:12px; }
+  .bar .grow { flex:1; }
+  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:7px 14px; cursor:pointer; }
+  button:hover { background:#eef1f5; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.primary:hover { background:#244bd0; }
+  button:disabled { opacity:.55; cursor:wait; }
+  .badge { font-size:12px; padding:2px 8px; border-radius:99px; background:#e8ecf4; color:#344; }
+  .banner { background:var(--warn); color:var(--warn-ink); border-radius:6px; padding:8px 12px; margin:0 0 12px; }
+  .counts { color:var(--muted); margin:0 0 10px; }
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; min-width:820px; }
+  th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); padding:6px 6px; border-bottom:1px solid var(--line); }
+  td { padding:6px; vertical-align:top; border-bottom:1px solid #eef0f3; }
+  td textarea { width:100%; min-height:38px; resize:vertical; }
+  td input[type=text], td input[type=date], td select { width:100%; }
+  .unassigned { background:var(--warn); border-color:#f0d58a; }
+  .hint { color:var(--muted); font-size:13px; padding-top:9px; }
+  .x { padding:4px 9px; color:var(--muted); }
+  input:disabled { background:#f1f3f6; color:#9aa4b2; }
+  #slackBox { width:100%; min-height:150px; margin-top:12px; font-family:ui-monospace, Menlo, Consolas, monospace; font-size:13px; }
+  #msg { color:var(--muted); min-height:1.4em; margin-top:8px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Meeting Notes → Tasks</h1>
+  <p class="sub">Paste your notes, check the table, then download a Jira CSV or copy a Slack message.</p>
+
+  <section class="card">
+    <label for="notes">Meeting notes</label>
+    <textarea id="notes" placeholder="Paste your messy notes here…"></textarea>
+    <div class="bar">
+      <div>
+        <label for="date" style="margin:0 0 2px">Meeting date</label>
+        <input type="date" id="date">
+      </div>
+      <label id="aiWrap" class="hidden" style="margin:0; font-weight:400">
+        <input type="checkbox" id="useAi" checked> Use Claude
+      </label>
+      <span class="grow"></span>
+      <button id="sampleBtn" type="button">Load sample</button>
+      <button id="goBtn" type="button" class="primary">Extract</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="results">
+    <div id="banner" class="banner hidden"></div>
+    <p class="counts"><span id="engine" class="badge"></span> <span id="counts"></span></p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th style="width:130px">Type</th><th>Item</th><th style="width:160px">Owner</th><th style="width:150px">Due</th><th style="width:130px">From notes</th><th style="width:40px"></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="bar">
+      <button id="addBtn" type="button">+ Add row</button>
+      <span class="grow"></span>
+      <button id="slackBtn" type="button">Copy as Slack message</button>
+      <button id="csvBtn" type="button" class="primary">Download Jira CSV</button>
+    </div>
+    <textarea id="slackBox" class="hidden" readonly aria-label="Slack message"></textarea>
+    <div id="msg" role="status" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+const TYPES = [["decision","Decision"],["action","Action item"],["follow_up","Follow-up"],["question","Open question"],["risk","Risk"]];
+const isTask = t => t === "action" || t === "follow_up";
+const $ = id => document.getElementById(id);
+let rows = [];
+
+$("date").value = new Date().toLocaleDateString("en-CA"); // today as YYYY-MM-DD
+
+function say(text) { $("msg").textContent = text; }
+
+async function api(path, body) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error("Server said " + res.status);
+  return res;
+}
+
+function el(tag, props = {}) {
+  const node = document.createElement(tag);
+  Object.assign(node, props);
+  return node;
+}
+
+function counts() {
+  const n = t => rows.filter(r => r.type === t && r.text.trim()).length;
+  const unassigned = rows.filter(r => isTask(r.type) && r.text.trim() && r.owner.trim().toLowerCase() === "unassigned").length;
+  $("counts").textContent = `${n("decision")} decisions · ${n("action")} action items · ${n("follow_up")} follow-ups · ${n("question")} questions · ${n("risk")} risks` +
+    (unassigned ? ` · ${unassigned} unassigned` : "");
+}
+
+function render() {
+  const body = $("rows");
+  body.replaceChildren();
+  rows.forEach((r, i) => {
+    const tr = el("tr");
+
+    const type = el("select", { ariaLabel: "Type" });
+    TYPES.forEach(([v, label]) => type.append(new Option(label, v, false, v === r.type)));
+    type.onchange = () => {
+      r.type = type.value;
+      if (isTask(r.type) && !r.owner.trim()) r.owner = "Unassigned";
+      render();
+    };
+
+    const text = el("textarea", { value: r.text, ariaLabel: "Item" });
+    text.oninput = () => { r.text = text.value; counts(); };
+
+    const task = isTask(r.type);
+    const owner = el("input", { type: "text", value: task ? r.owner : "", disabled: !task, placeholder: task ? "" : "—", ariaLabel: "Owner" });
+    owner.className = task && r.owner.trim().toLowerCase() === "unassigned" ? "unassigned" : "";
+    owner.oninput = () => { r.owner = owner.value; owner.className = r.owner.trim().toLowerCase() === "unassigned" ? "unassigned" : ""; counts(); };
+    owner.onblur = () => { if (!owner.value.trim()) { r.owner = "Unassigned"; owner.value = "Unassigned"; owner.className = "unassigned"; counts(); } };
+
+    const due = el("input", { type: "date", value: task ? r.due : "", disabled: !task, ariaLabel: "Due date" });
+    due.oninput = () => { r.due = due.value; };
+
+    const hint = el("div", { className: "hint", textContent: task && r.due_text ? "“" + r.due_text + "”" : "" });
+    const del = el("button", { type: "button", className: "x", textContent: "✕", title: "Delete row", ariaLabel: "Delete row" });
+    del.onclick = () => { rows.splice(i, 1); render(); };
+
+    [type, text, owner, due, hint, del].forEach(node => { const td = el("td"); td.append(node); tr.append(td); });
+    body.append(tr);
+  });
+  counts();
+}
+
+async function extract() {
+  const notes = $("notes").value.trim();
+  if (!notes) { say(""); alert("Paste some notes first."); return; }
+  $("goBtn").disabled = true; $("goBtn").textContent = "Working…";
+  try {
+    const res = await api("/api/extract", { notes, meeting_date: $("date").value || null, use_ai: !$("aiWrap").classList.contains("hidden") && $("useAi").checked });
+    const data = await res.json();
+    rows = data.rows;
+    $("engine").textContent = data.engine === "claude" ? "Read by Claude" : "Read by built-in rules";
+    $("banner").textContent = data.warning;
+    $("banner").classList.toggle("hidden", !data.warning);
+    $("results").classList.remove("hidden");
+    $("slackBox").classList.add("hidden");
+    render();
+    say(rows.length ? "Check the table, fix anything that's wrong, then export." : "Nothing found. Try adding headings like “Action items” or add rows by hand.");
+  } catch (e) { say("Something went wrong: " + e.message); }
+  finally { $("goBtn").disabled = false; $("goBtn").textContent = "Extract"; }
+}
+
+function payload() {
+  rows.forEach(r => { if (isTask(r.type) && !r.owner.trim()) r.owner = "Unassigned"; });
+  return { rows: rows.filter(r => r.text.trim()), meeting_date: $("date").value || null };
+}
+
+async function downloadCsv() {
+  const p = payload();
+  if (!p.rows.some(r => isTask(r.type))) { say("There are no action items or follow-ups to export."); return; }
+  try {
+    const blob = await (await api("/api/export/csv", p)).blob();
+    const a = el("a", { href: URL.createObjectURL(blob), download: `jira-tasks-${$("date").value || "meeting"}.csv` });
+    document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+    say("CSV downloaded. Only action items and follow-ups are included.");
+  } catch (e) { say("Something went wrong: " + e.message); }
+}
+
+async function copySlack() {
+  const p = payload();
+  if (!p.rows.length) { say("Nothing to copy yet."); return; }
+  try {
+    const { text } = await (await api("/api/export/slack", p)).json();
+    const box = $("slackBox");
+    box.value = text; box.classList.remove("hidden");
+    try { await navigator.clipboard.writeText(text); say("Slack message copied. Paste it into Slack."); }
+    catch { box.select(); say("Couldn't copy automatically. The text is selected below, press Ctrl+C (Cmd+C on Mac)."); }
+  } catch (e) { say("Something went wrong: " + e.message); }
+}
+
+$("goBtn").onclick = extract;
+$("csvBtn").onclick = downloadCsv;
+$("slackBtn").onclick = copySlack;
+$("addBtn").onclick = () => { rows.push({ type: "action", text: "", owner: "Unassigned", due: "", due_text: "" }); render(); };
+$("sampleBtn").onclick = async () => {
+  const s = await (await fetch("/api/sample")).json();
+  $("notes").value = s.notes; $("date").value = s.meeting_date;
+};
+fetch("/api/status").then(r => r.json()).then(s => { if (s.ai_enabled) $("aiWrap").classList.remove("hidden"); }).catch(() => {});
+</script>
+</body>
+</html>

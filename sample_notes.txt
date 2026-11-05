@@ -1,0 +1,27 @@
+Meeting date: 2026-11-02
+Weekly Product Sync - Atlas launch
+Attendees: Priya, Sam, Marco, Lena
+
+Discussion
+- Went through the launch checklist. Beta feedback is mostly positive.
+- We decided to push the public launch to Nov 24 instead of Nov 17.
+- Agreed to keep pricing as is for now.
+
+Action items
+- Priya to send the updated launch deck to the exec team by Friday
+- Sam will fix the signup bug before next Tuesday
+- Marco: book the demo environment for the customer webinar - by end of week
+- Update the help-centre articles
+- Lena to confirm legal sign-off on the new terms by Nov 12
+
+Follow-ups
+- Check with finance on the Q4 budget (Marco) by tomorrow
+- Follow up with the design agency about the new icons
+
+Open questions
+- Who is going to own the customer webinar slides?
+- Do we need a security review before launch?
+
+Risks
+- Payment provider migration may slip past launch.
+- Only one engineer knows the signup flow; if Sam is out we are blocked.
